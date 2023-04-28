@@ -685,6 +685,7 @@ node `(elisp) Sentinels').  Kills the buffer before returning."
     (with-current-buffer buffer
       (pcase status
         ((or 0 "finished\n")
+         (message "PLZ LOG FINISHED")
          ;; Curl exited normally: check HTTP status code.
          (if plz-sync
              (plz--timer buffer status)
@@ -692,6 +693,7 @@ node `(elisp) Sentinels').  Kills the buffer before returning."
 
         ((or (and (pred numberp) code)
              (rx "exited abnormally with code " (let code (group (1+ digit)))))
+         (message "PLZ LOG NUMBER: %s" code)
          ;; Curl error.
          (ignore code)
          (if plz-sync
@@ -699,6 +701,7 @@ node `(elisp) Sentinels').  Kills the buffer before returning."
            (run-at-time 0 nil #'plz--timer buffer status)))
 
         ((and (or "killed\n" "interrupt\n") status)
+         (message "PLZ LOG killed/interrupt")
          ;; Curl process killed or interrupted.
          (if plz-sync
              (plz--timer buffer status)
