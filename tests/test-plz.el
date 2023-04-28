@@ -221,7 +221,16 @@
                                   response-jpeg
                                   (base64-decode-string
                                    (string-remove-prefix "data:application/octet-stream;base64,"
-                                                         (alist-get 'data json))))))))
+                                                         (alist-get 'data json))))
+                            (message "plz-post-jpeg-string: BUFFER:%S  PROCESS:%S  STATUS:%S  ALIVE-P:%S  CONTENTS:%S  JSON:%S"
+                                     (current-buffer)
+                                     (get-buffer-process (current-buffer))
+                                     (when (get-buffer-process (current-buffer))
+                                       (process-status (get-buffer-process (current-buffer))))
+                                     (when (get-buffer-process (current-buffer))
+                                       (process-live-p (get-buffer-process (current-buffer))))
+                                     (buffer-string)
+                                     json)))))
     (should (equal 'jpeg (image-type-from-data jpeg-to-upload)))
     (plz-test-wait process)
     (should response-json)
@@ -276,15 +285,24 @@
 ;; with "--config" rather than on the command line.
 
 (plz-deftest plz-get-with-headers ()
-  (let* ((response-json)
-         (process (plz 'get "https://httpbin.org/get"
-                    :headers '(("X-Plz-Test-Header" . "plz-test-header-value"))
-                    :as #'json-read
-                    :then (lambda (json)
-                            (setf response-json json)))))
-    (plz-test-wait process)
-    (let-alist response-json
-      (should (equal "plz-test-header-value" .headers.X-Plz-Test-Header)))))
+             (let* ((response-json)
+                    (process (plz 'get "https://httpbin.org/get"
+                               :headers '(("X-Plz-Test-Header" . "plz-test-header-value"))
+                               :as #'json-read
+                               :then (lambda (json)
+                                       (setf response-json json)
+                                       (message "plz-get-with-headers: BUFFER:%S  PROCESS:%S  STATUS:%S  ALIVE-P:%S  CONTENTS:%S  JSON:%S"
+                                                (current-buffer)
+                                                (get-buffer-process (current-buffer))
+                                                (when (get-buffer-process (current-buffer))
+                                                  (process-status (get-buffer-process (current-buffer))))
+                                                (when (get-buffer-process (current-buffer))
+                                                  (process-live-p (get-buffer-process (current-buffer))))
+                                                (buffer-string)
+                                                json)))))
+               (plz-test-wait process)
+               (let-alist response-json
+                 (should (equal "plz-test-header-value" .headers.X-Plz-Test-Header)))))
 
 (plz-deftest plz-post-with-headers ()
   (let* ((alist (list (cons "key" "value")))
@@ -541,17 +559,19 @@ and only called once."
   (let* ((queue (make-plz-queue :limit 2))
          (urls '("https://httpbin.org/get?foo=0"
                  "https://httpbin.org/get?foo=1"))
+         (waits 0)
          completed-urls)
     (dolist (url urls)
       (plz-queue queue
         'get url :then (lambda (_)
+			 (message "pushing URL:%S" url)
                          (push url completed-urls))))
     (plz-run queue)
-    (cl-loop with waits = 0
-             while (and (plz-queue-active queue) (< waits 20))
+    (cl-loop while (and (plz-queue-active queue) (< waits 40))
              do (progn
                   (sleep-for 0.1)
                   (cl-incf waits)))
+    (should (not (>= waits 40)))
     (should (seq-set-equal-p urls completed-urls))
     (should (zerop (plz-length queue)))))
 
