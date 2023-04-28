@@ -385,8 +385,7 @@ NOQUERY is passed to `make-process', which see."
     (when (eq 'sync then)
       (setf sync-p t
             ;; FIXME: For sync requests, `else' should be forced nil.
-            then (lambda (result)
-                   (setf plz-result result))))
+            then #'plz--sync-result))
     (with-current-buffer (generate-new-buffer " *plz-request-curl*")
       ;; Avoid making process in a nonexistent directory (in case the current
       ;; default-directory has since been removed).  It's unclear what the best
@@ -470,10 +469,14 @@ NOQUERY is passed to `make-process', which see."
                   ;; According to the Elisp manual, blocking on a process's
                   ;; output is really this simple.  And it seems to work.
                   (accept-process-output process))
-              (prog1 plz-result
-                (unless (eq as 'buffer)
-                  (kill-buffer))))
+              (unwind-protect
+                  plz-result
+                (unless (eq 'buffer as)
+                  (kill-buffer (process-buffer process)))))
           process)))))
+
+(defun plz--sync-result (result)
+  (setf plz-result result))
 
 ;;;;; Queue
 
@@ -667,9 +670,35 @@ node `(elisp) Sentinels').  Kills the buffer before returning."
   ;; Inspired by and some code copied from `elfeed-curl--sentinel'.
   (let* ((buffer (cl-etypecase process-or-buffer
                    (process (process-buffer process-or-buffer))
-                   (buffer process-or-buffer)))
-         (finally (buffer-local-value 'plz-finally buffer))
-         sync)
+                   (buffer process-or-buffer))))
+    (with-current-buffer buffer
+      (pcase status
+        ((or 0 "finished\n")
+         ;; Curl exited normally: check HTTP status code.
+         (if plz-sync
+             (plz--timer buffer status)
+           (run-at-time 0 nil #'plz--timer buffer status)))
+
+        ((or (and (pred numberp) code)
+             (rx "exited abnormally with code " (let code (group (1+ digit)))))
+         ;; Curl error.
+         (ignore code)
+         (if plz-sync
+             (plz--timer buffer status)
+           (run-at-time 0 nil #'plz--timer buffer status)))
+
+        ((and (or "killed\n" "interrupt\n") status)
+         ;; Curl process killed or interrupted.
+         (if plz-sync
+             (plz--timer buffer status)
+           (run-at-time 0 nil #'plz--timer buffer status)))))))
+
+(defun plz--timer (buffer status)
+  "Process HTTP response in BUFFER.
+To be called from a timer run in `plz--sentinel'."
+  ;; Inspired by and some code copied from `elfeed-curl--sentinel'.
+  (let ((finally (buffer-local-value 'plz-finally buffer))
+        sync)
     (unwind-protect
         (with-current-buffer buffer
           (setf sync plz-sync)
@@ -681,7 +710,7 @@ node `(elisp) Sentinels').  Kills the buffer before returning."
              (pcase (plz--http-status)
                ((and status (guard (<= 200 status 299)))
                 ;; Any 2xx response is considered successful.
-                (ignore status)  ; Byte-compiling in Emacs <28 complains without this.
+                (ignore status) ; Byte-compiling in Emacs <28 complains without this.
                 (funcall plz-then))
                ;; Any other status code is considered unsuccessful
                ;; (for now, anyway).
