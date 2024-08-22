@@ -325,7 +325,8 @@ Compatibility function for Emacs versions <28.1."
 
 (cl-defun plz (method url &rest rest &key headers body else filter finally noquery timeout
                       (as 'string) (then 'sync)
-                      (body-type 'text) (decode t decode-s)
+                      (body-type 'text) (encode t encode-s)
+                      (decode t decode-s)
                       (connect-timeout plz-connect-timeout))
   "Request METHOD from URL with curl.
 Return the curl process object or, for a synchronous request, the
@@ -339,6 +340,11 @@ to upload a file from disk.
 
 BODY-TYPE may be `text' to send BODY as text, or `binary' to send
 it as binary.
+
+If ENCODE is non-nil, BODY is encoded automatically.  For binary
+content, it should be nil.  When BODY-TYPE is `binary', ENCODE is
+automatically set to nil.  ENCODE has no effect when BODY is a
+list like `(file FILENAME)'.
 
 AS selects the kind of result to pass to the callback function
 THEN, or the kind of result to return for synchronous requests.
@@ -416,6 +422,8 @@ into the process buffer.
   (declare (indent defun))
   (setf decode (if (and decode-s (not decode))
                    nil decode))
+  (setf encode (if (and encode-s (not encode))
+                   nil encode))
   ;; NOTE: By default, for PUT requests and POST requests >1KB, curl sends an
   ;; "Expect:" header, which causes servers to send a "100 Continue" response, which
   ;; we don't want to have to deal with, so we disable it by setting the header to
@@ -473,6 +481,9 @@ into the process buffer.
          (decode (pcase as
                    ('binary nil)
                    (_ decode)))
+         (encode (pcase body-type
+                   ('binary nil)
+                   (_ encode)))
          (default-directory
           ;; Avoid making process in a nonexistent directory (in case the current
           ;; default-directory has since been removed).  It's unclear what the best
@@ -553,9 +564,18 @@ into the process buffer.
     (process-send-string process curl-config)
     (when body
       (cl-typecase body
-        (string (process-send-string process body))
-        (buffer (with-current-buffer body
-                  (process-send-region process (point-min) (point-max))))))
+        (string (process-send-string
+                 process (if encode
+                             (encode-coding-string
+                              body (cdr default-process-coding-system))
+                           body)))
+        (buffer (if encode
+                    (with-temp-buffer
+                      (insert-buffer-substring-no-properties body)
+                      (encode-coding-region (point-min) (point-max) body-coding)
+                      (process-send-region process (point-min) (point-max)))
+                  (with-current-buffer body
+                    (process-send-region process (point-min) (point-max)))))))
     (process-send-eof process)
     (if sync-p
         (unwind-protect
