@@ -323,7 +323,7 @@ Compatibility function for Emacs versions <28.1."
 
 ;;;;; Public
 
-(cl-defun plz (method url &rest rest &key headers body else filter finally noquery timeout
+(cl-defun plz (method url &rest rest &key headers body else filter finally noquery timeout body-coding
                       (as 'string) (then 'sync)
                       (body-type 'text) (decode t decode-s)
                       (connect-timeout plz-connect-timeout))
@@ -339,6 +339,13 @@ to upload a file from disk.
 
 BODY-TYPE may be `text' to send BODY as text, or `binary' to send
 it as binary.
+
+BODY-CODING may a coding system used to encode BODY before
+passing it to curl.  BODY-CODING has no effect when BODY is a
+list like `(file FILENAME)'.  If nil and BODY is a string, the
+default process I/O output coding system is used.  If nil and
+BODY is a buffer, the buffer-local value of
+`buffer-file-coding-system' is used.
 
 AS selects the kind of result to pass to the callback function
 THEN, or the kind of result to return for synchronous requests.
@@ -416,6 +423,19 @@ into the process buffer.
   (declare (indent defun))
   (setf decode (if (and decode-s (not decode))
                    nil decode))
+  (unless body-coding
+    (pcase-exhaustive body
+      (`(file ,filename)
+       ;; Don't set BODY-CODING; files are passed as-is to curl.
+       (setf body-coding nil))
+      ((pred stringp)
+       ;; Use default output coding for processes.
+       (setf body-coding (cdr default-process-coding-system)))
+      ((and (pred bufferp) buffer)
+       ;; Use buffer-local coding.
+       (setf body-coding
+             (buffer-local-value 'buffer-file-coding-system buffer)))))
+
   ;; NOTE: By default, for PUT requests and POST requests >1KB, curl sends an
   ;; "Expect:" header, which causes servers to send a "100 Continue" response, which
   ;; we don't want to have to deal with, so we disable it by setting the header to
@@ -553,8 +573,11 @@ into the process buffer.
     (process-send-string process curl-config)
     (when body
       (cl-typecase body
-        (string (process-send-string process body))
-        (buffer (with-current-buffer body
+        (string (process-send-string
+                 process (encode-coding-string body body-coding t)))
+        (buffer (with-temp-buffer
+                  (insert-buffer-substring-no-properties body)
+                  (encode-coding-region (point-min) (point-max) body-coding)
                   (process-send-region process (point-min) (point-max))))))
     (process-send-eof process)
     (if sync-p
